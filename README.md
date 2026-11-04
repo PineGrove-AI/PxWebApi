@@ -15,6 +15,10 @@ curl -i -H 'API_ADMIN_KEY: test' -X 'PATCH' -H 'Content-Type: application/json' 
 curl -i -H 'API_ADMIN_KEY: test' -X 'DELETE' https://localhost:8443/api/v2/admin/cache
 ```
 
+### Plugins
+
+PxWebApi can load plugins: assemblies that add services and endpoints of their own, configured under `Plugins` in appsettings.json and listed in `GET /config`. See [PxWeb.Plugins.Abstractions/README.md](PxWeb.Plugins.Abstractions/README.md).
+
 ### Code formatting
 
 We use [dotnet format](https://github.com/dotnet/format) to clean the source code. The build pipeline aslo checks for formatting error.

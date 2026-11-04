@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 
 using PxWeb.Api2.Server.Models;
 using PxWeb.Code;
+using PxWeb.Code.Plugins;
 
 using Language = PxWeb.Api2.Server.Models.Language;
 
@@ -19,14 +20,16 @@ namespace PxWeb.Controllers.Api2
         private readonly IPxApiConfigurationService _pxApiConfigurationService;
         private readonly IpRateLimitOptions _rateLimitOptions;
         private readonly ILogger<ConfigurationApiController> _logger;
+        private readonly PluginRegistry _plugins;
         private const int DefaultTimeWindow = 0;
         private const int DefaultMaxCallsPerTimeWindow = 0;
         public ConfigurationApiController(IPxApiConfigurationService pxApiConfigurationService, IOptions<IpRateLimitOptions> rateLimitOptions,
-                ILogger<ConfigurationApiController> logger)
+                ILogger<ConfigurationApiController> logger, PluginRegistry plugins)
         {
             _pxApiConfigurationService = pxApiConfigurationService;
             _rateLimitOptions = rateLimitOptions.Value;
             _logger = logger;
+            _plugins = plugins;
         }
 
         public override IActionResult GetApiConfiguration()
@@ -101,6 +104,8 @@ namespace PxWeb.Controllers.Api2
                 cors.Params.Add(keyValuePair);
                 configResponse.Features.Add(cors);
 
+                // Each plugin is a feature, which is how clients find it.
+                configResponse.Features.AddRange(_plugins.GetFeatures());
 
                 return new ObjectResult(configResponse);
             }

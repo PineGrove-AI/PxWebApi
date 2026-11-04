@@ -40,10 +40,19 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PxWeb\PxWeb.csproj" />
+    <!-- Built, not referenced: PluginTests load it from its own folder, as PxWebApi loads a real plugin. -->
+    <ProjectReference Include="..\PxWeb.Plugins.Sample\PxWeb.Plugins.Sample.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SamplePluginPath</_Parameter1>
+      <_Parameter2>$(MSBuildThisFileDirectory)../PxWeb.Plugins.Sample/bin/$(Configuration)/net8.0/PxWeb.Plugins.Sample.dll</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

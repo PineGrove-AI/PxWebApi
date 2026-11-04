@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- An example plugin, and the one the plugin tests load. Build it, then point a Plugins entry in
+       appsettings.json at its PxWeb.Plugins.Sample.dll. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+    <!-- Writes the .deps.json PxWebApi's plugin load context resolves this plugin's own dependencies from. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PxWebApi provides the abstractions at run time: not copied, so there is only ever one. -->
+    <ProjectReference Include="..\PxWeb.Plugins.Abstractions\PxWeb.Plugins.Abstractions.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>

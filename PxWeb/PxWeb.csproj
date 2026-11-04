@@ -85,6 +85,7 @@
     <ProjectReference Include="..\Px.Abstractions\Px.Abstractions.csproj" />
     <ProjectReference Include="..\Px.Search.Lucene\Px.Search.Lucene.csproj" />
     <ProjectReference Include="..\Px.Search\Px.Search.csproj" />
+    <ProjectReference Include="..\PxWeb.Plugins.Abstractions\PxWeb.Plugins.Abstractions.csproj" />
   </ItemGroup>
 
   <ItemGroup>
