@@ -1,0 +1,63 @@
+openapi: 3.0.3
+info:
+  title: PxWebApi table search plugin
+  version: 1.0.0
+  description: |
+    Endpoint implemented by a table search plugin. PxWebApi forwards
+    GET /plugins/{name}/{TableSearch} to {Url}{TableSearch}.
+paths:
+  /{tableSearch}:
+    get:
+      summary: Tables matching a free text query, best match first.
+      parameters:
+        - name: tableSearch
+          in: path
+          required: true
+          description: The TableSearch path from the plugin configuration.
+          schema:
+            type: string
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: lang
+          in: query
+          required: false
+          description: Language id, as in PxWebApi.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Matching tables.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TableSearchResponse"
+        "400":
+          description: Missing or invalid query.
+components:
+  schemas:
+    TableSearchResponse:
+      type: object
+      required: [tables]
+      properties:
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/TableSearchHit"
+        note:
+          type: string
+          nullable: true
+          description: Optional text for clients to show with the results.
+    TableSearchHit:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: Table id, as in GET /tables.
+        score:
+          type: number
+          format: double
+          nullable: true

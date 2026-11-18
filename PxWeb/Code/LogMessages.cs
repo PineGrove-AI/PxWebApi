@@ -211,6 +211,23 @@ namespace PxWeb.Code
 
     internal static partial class LogMessages
     {
+        [LoggerMessage(
+            Message = "Plugin {name} mapped to {path}, forwarding to {url}.",
+            Level = LogLevel.Information,
+            SkipEnabledCheck = false)]
+        internal static partial void LogPluginLoaded(
+            this ILogger logger,
+            string name,
+            string path,
+            string url);
 
+        [LoggerMessage(
+            Message = "Request to plugin {name} failed: {reason}.",
+            Level = LogLevel.Warning,
+            SkipEnabledCheck = false)]
+        internal static partial void LogPluginFailed(
+            this ILogger logger,
+            string name,
+            string reason);
     }
 }

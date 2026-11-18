@@ -26,6 +26,7 @@ using PxWeb.Code.Api2.NewtonsoftConfiguration;
 using PxWeb.Code.Api2.SavedQueryBackend;
 using PxWeb.Code.Api2.Serialization;
 using PxWeb.Code.BackgroundWorker;
+using PxWeb.Code.Plugins;
 using PxWeb.Filters.Api2;
 using PxWeb.Helper.Api2;
 using PxWeb.Mappers;
@@ -156,6 +157,8 @@ namespace PxWeb
 
             builder.Services.AddPxSearchEngine(builder);
 
+            builder.Services.AddPxPlugins(builder);
+
             var languages = PxApiConfiguration.Languages?.Select(l => l.Id).ToList() ?? [];
             builder.Services.AddControllers(x =>
                 x.Filters.Add(new LangValidationFilter(languages))
@@ -239,6 +242,8 @@ namespace PxWeb
             });
 
             app.MapControllers();
+
+            app.MapPxPlugins();
 
             if (!app.Environment.IsDevelopment())
             {

@@ -15,6 +15,10 @@ curl -i -H 'API_ADMIN_KEY: test' -X 'PATCH' -H 'Content-Type: application/json' 
 curl -i -H 'API_ADMIN_KEY: test' -X 'DELETE' https://localhost:8443/api/v2/admin/cache
 ```
 
+### Plugins
+
+External services can be added to the API as plugins. Each plugin is configured under `Plugins` in appsettings.json, listed as a feature in `GET /config`, and requests to `plugins/{name}/` are forwarded to it. See [docs/plugins/README.md](docs/plugins/README.md).
+
 ### Code formatting
 
 We use [dotnet format](https://github.com/dotnet/format) to clean the source code. The build pipeline aslo checks for formatting error.
