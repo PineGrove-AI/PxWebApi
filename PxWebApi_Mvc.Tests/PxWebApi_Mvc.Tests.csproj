@@ -31,28 +31,19 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.33" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.2" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.0" />
-    <PackageReference Include="MSTest.TestAdapter" Version="4.0.1" />
-    <PackageReference Include="MSTest.TestFramework" Version="4.0.1" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.5.2" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.5.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="PxWeb.Api2.Server" Version="2.3.2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PxWeb\PxWeb.csproj" />
-    <!-- Built, not referenced: PluginTests load it from its own folder, as PxWebApi loads a real plugin. -->
-    <ProjectReference Include="..\PxWeb.Plugins.Sample\PxWeb.Plugins.Sample.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-      <_Parameter1>SamplePluginPath</_Parameter1>
-      <_Parameter2>$(MSBuildThisFileDirectory)../PxWeb.Plugins.Sample/bin/$(Configuration)/net8.0/PxWeb.Plugins.Sample.dll</_Parameter2>
-    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

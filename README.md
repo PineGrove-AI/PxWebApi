@@ -17,7 +17,7 @@ curl -i -H 'API_ADMIN_KEY: test' -X 'DELETE' https://localhost:8443/api/v2/admin
 
 ### Plugins
 
-PxWebApi can load plugins: assemblies that add services and endpoints of their own, configured under `Plugins` in appsettings.json and listed in `GET /config`. See [PxWeb.Plugins.Abstractions/README.md](PxWeb.Plugins.Abstractions/README.md).
+PxWebApi can offer plugins: services of their own, configured under `Plugins` in appsettings.json, listed in `GET /config` and reached through PxWebApi under `plugins/{name}/`. PxWebApi runs none of their code. See [docs/plugins/README.md](docs/plugins/README.md).
 
 ### Code formatting
 
