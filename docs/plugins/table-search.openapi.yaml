@@ -1,0 +1,68 @@
+openapi: 3.0.3
+info:
+  title: PxWebApi table search plugin
+  version: 1.0.0
+  description: |
+    What a table search plugin answers. PxWebApi forwards `GET /plugins/{name}/{TableSearch}` to the
+    plugin's `{Url}{TableSearch}`, with the query string, and PxWeb offers the plugin as an alternative to
+    its keyword search. Any error status, or an answer that doesn't match this contract, makes PxWeb fall
+    back to its keyword search.
+paths:
+  /{tableSearch}:
+    get:
+      summary: The tables that match a free-text query, best match first.
+      parameters:
+        - name: tableSearch
+          in: path
+          required: true
+          description: The plugin's TableSearch path, e.g. `search`.
+          schema:
+            type: string
+        - name: query
+          in: query
+          required: true
+          description: What the user typed.
+          schema:
+            type: string
+        - name: lang
+          in: query
+          required: false
+          description: The language PxWeb shows, as a PxWebApi language id (e.g. `da`, `en`).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The matching tables. An empty list means none match.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TableSearchResponse"
+        "400":
+          description: No query, or one the plugin can't use.
+components:
+  schemas:
+    TableSearchResponse:
+      type: object
+      required: [tables]
+      properties:
+        tables:
+          type: array
+          description: The matching tables, best match first.
+          items:
+            $ref: "#/components/schemas/TableSearchHit"
+        note:
+          type: string
+          nullable: true
+          description: An optional short text about the search for clients to show with the results.
+    TableSearchHit:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: The table's id, as in PxWebApi's `GET /tables`.
+        score:
+          type: number
+          format: double
+          nullable: true
+          description: An optional relevance score; higher is better.

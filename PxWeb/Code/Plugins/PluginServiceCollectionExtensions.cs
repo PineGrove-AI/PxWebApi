@@ -1,29 +1,32 @@
-using System.IO;
 using System.Linq;
-using System.Reflection;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
 
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using PxWeb.Plugins;
-
 namespace PxWeb.Code.Plugins
 {
     /// <summary>
-    /// Loads the plugins listed under <c>Plugins</c> in appsettings.json and wires them in:
+    /// Reads the plugins listed under <c>Plugins</c> in appsettings.json and offers them:
     /// <code>
     /// "Plugins": [
     ///   {
-    ///     "Assembly": "plugins/MyPlugin/MyPlugin.dll",
-    ///     "Enabled": true,
-    ///     "Options": { "AnySetting": "the plugin's own" }
+    ///     "Name": "ai-search",
+    ///     "Url": "http://ai-search:8080/pxweb/",
+    ///     "Headers": { "Authorization": "Bearer ..." },
+    ///     "Label": "AI search",
+    ///     "TableSearch": "search"
     ///   }
     /// ]
     /// </code>
-    /// <c>Assembly</c> is relative to the content root, or absolute. <c>Enabled</c> defaults to true.
-    /// No <c>Plugins</c> section means no plugins, and PxWebApi behaves as without this feature.
+    /// A plugin is a service of its own. PxWebApi lists it in <c>GET /config</c> and forwards requests under
+    /// <c>plugins/{Name}/</c> to its <c>Url</c>; it loads no code. No <c>Plugins</c> section means no
+    /// plugins, and PxWebApi behaves as without this feature.
     /// </summary>
     public static class PluginServiceCollectionExtensions
     {
@@ -31,68 +34,43 @@ namespace PxWeb.Code.Plugins
 
         public static void AddPxPlugins(this IServiceCollection services, WebApplicationBuilder builder)
         {
-            var plugins = LoadPlugins(builder.Configuration.GetSection(SectionName), builder.Environment.ContentRootPath, services);
-            services.AddSingleton(new PluginRegistry(plugins));
+            var registry = ReadPlugins(builder.Configuration.GetSection(SectionName));
+            services.AddSingleton(registry);
+            services.AddHttpClient(); // The proxy's IHttpClientFactory, also when no plugin is configured.
+            services.AddSingleton<IPluginProxy, PluginProxy>();
+
+            foreach (var plugin in registry.Plugins)
+            {
+                // The proxy's own timeout covers the whole answer, body included, so the client has none.
+                // No redirects: the plugin's URL is the one configured. Compressed answers are decompressed,
+                // since Content-Encoding isn't passed on.
+                services.AddHttpClient(plugin.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                    {
+                        AllowAutoRedirect = false,
+                        AutomaticDecompression = DecompressionMethods.All,
+                        UseCookies = false,
+                    });
+            }
         }
 
-        /// <summary>Maps each plugin's endpoints under <c>plugins/{Name}</c>.</summary>
+        /// <summary>Forwards each plugin's path, <c>plugins/{Name}/</c>, to the plugin.</summary>
         public static void MapPxPlugins(this WebApplication app)
         {
             var registry = app.Services.GetRequiredService<PluginRegistry>();
-            foreach (var loaded in registry.Plugins)
+            foreach (var plugin in registry.Plugins)
             {
-                loaded.Plugin.MapEndpoints(app.MapGroup("/" + loaded.BasePath));
-                app.Logger.LogPluginLoaded(loaded.Plugin.Name, loaded.Plugin.GetType().Assembly.Location, "/" + loaded.BasePath);
+                app.MapMethods("/" + plugin.BasePath + "/{**rest}", [HttpMethods.Get, HttpMethods.Head, HttpMethods.Post],
+                    (HttpContext context, IPluginProxy proxy) => proxy.ForwardAsync(context, plugin))
+                    .ExcludeFromDescription();
+                app.Logger.LogPluginLoaded(plugin.Name, "/" + plugin.BasePath, plugin.Upstream.GetLeftPart(UriPartial.Path));
             }
         }
 
-        /// <summary>
-        /// Loads every enabled plugin in the section and lets it register its services. A plugin that
-        /// can't be loaded stops startup: a deployment that asked for it would otherwise run without it.
-        /// </summary>
-        internal static List<IPxWebApiPlugin> LoadPlugins(IConfigurationSection section, string contentRoot, IServiceCollection services)
-        {
-            var plugins = new List<IPxWebApiPlugin>();
-            foreach (var entry in section.GetChildren())
-            {
-                if (!entry.GetValue("Enabled", true))
-                {
-                    continue;
-                }
-
-                var assemblyPath = entry["Assembly"];
-                if (string.IsNullOrWhiteSpace(assemblyPath))
-                {
-                    throw new InvalidOperationException($"{entry.Path}: Assembly is not set.");
-                }
-
-                var fullPath = Path.GetFullPath(assemblyPath, contentRoot);
-                if (!File.Exists(fullPath))
-                {
-                    throw new InvalidOperationException($"{entry.Path}: plugin assembly {fullPath} does not exist.");
-                }
-
-                var plugin = CreatePlugin(new PluginLoadContext(fullPath).LoadFromAssemblyPath(fullPath), entry.Path);
-                plugin.ConfigureServices(services, entry.GetSection("Options"));
-                plugins.Add(plugin);
-            }
-            return plugins;
-        }
-
-        private static IPxWebApiPlugin CreatePlugin(Assembly assembly, string configPath)
-        {
-            var types = assembly.GetExportedTypes()
-                .Where(t => typeof(IPxWebApiPlugin).IsAssignableFrom(t) && t is { IsClass: true, IsAbstract: false })
-                .ToList();
-
-            if (types.Count != 1)
-            {
-                throw new InvalidOperationException(
-                    $"{configPath}: {assembly.GetName().Name} must have exactly one public class implementing {nameof(IPxWebApiPlugin)}, found {types.Count}.");
-            }
-
-            return (IPxWebApiPlugin)(Activator.CreateInstance(types[0])
-                ?? throw new InvalidOperationException($"{configPath}: could not create {types[0].FullName}."));
-        }
+        /// <summary>The enabled entries in the section, checked: one that is wrong stops startup.</summary>
+        internal static PluginRegistry ReadPlugins(IConfigurationSection section) =>
+            new(section.GetChildren()
+                .Where(entry => entry.GetValue("Enabled", true))
+                .Select(entry => (entry.Path, entry.Get<PluginOptions>() ?? new PluginOptions())));
     }
 }

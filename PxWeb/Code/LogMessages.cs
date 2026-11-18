@@ -212,13 +212,22 @@ namespace PxWeb.Code
     internal static partial class LogMessages
     {
         [LoggerMessage(
-            Message = "Plugin {name} loaded from {assembly}, at {path}.",
+            Message = "Plugin {name} at {path} forwards to {url}.",
             Level = LogLevel.Information,
             SkipEnabledCheck = false)]
         internal static partial void LogPluginLoaded(
             this ILogger logger,
             string name,
-            string assembly,
-            string path);
+            string path,
+            string url);
+
+        [LoggerMessage(
+            Message = "Plugin {name} did not answer: {reason}.",
+            Level = LogLevel.Warning,
+            SkipEnabledCheck = false)]
+        internal static partial void LogPluginFailed(
+            this ILogger logger,
+            string name,
+            string reason);
     }
 }
