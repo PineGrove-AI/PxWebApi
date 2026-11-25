@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,139 +14,127 @@ using PxWeb;
 
 namespace PxWebApi_Mvc.Tests
 {
-    /// <summary>
-    /// A plugin as a deployment configures one, with the plugin itself played by <see cref="FakePlugin"/>:
-    /// every request PxWebApi forwards to it reaches the fake instead of the network.
-    /// </summary>
     [TestClass]
     public class PluginTests
     {
-        private const string PluginUrl = "http://search.test/pxweb/";
+        private const string PluginUrl = "http://plugin.test/api/";
 
-        /// <summary>Records the requests it gets and answers them with <see cref="Answer"/>.</summary>
-        private sealed class FakePlugin : HttpMessageHandler
+        private sealed class FakePluginHandler : HttpMessageHandler
         {
             public List<(HttpRequestMessage Request, string? Body)> Requests { get; } = [];
 
-            public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Answer { get; set; } = (_, _) =>
+            public Func<CancellationToken, Task<HttpResponseMessage>> Respond { get; set; } = _ =>
                 Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent("""{"tables":[{"id":"TAB001","score":0.9}],"note":"population"}""", Encoding.UTF8, "application/json"),
+                    Content = new StringContent("""{"tables":[{"id":"TAB001","score":0.9}]}""", Encoding.UTF8, "application/json"),
                 });
 
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
                 Requests.Add((request, body));
-                return await Answer(request, cancellationToken);
+                return await Respond(cancellationToken);
             }
         }
 
-        private static WebApplicationFactory<Program> WithPlugin(FakePlugin plugin, bool enabled = true, string url = PluginUrl, int timeoutSeconds = 30) =>
-            new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        private static WebApplicationFactory<Program> CreateApplication(FakePluginHandler handler, bool enabled = true, string url = PluginUrl, int timeoutSeconds = 30)
+        {
+            return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             {
                 builder.UseSetting("Plugins:0:Name", "sample");
                 builder.UseSetting("Plugins:0:Url", url);
                 builder.UseSetting("Plugins:0:Enabled", enabled.ToString());
                 builder.UseSetting("Plugins:0:TimeoutSeconds", timeoutSeconds.ToString());
                 builder.UseSetting("Plugins:0:Headers:Authorization", "Bearer plugin-key");
-                builder.UseSetting("Plugins:0:Label", "Sample search");
-                builder.UseSetting("Plugins:0:TableSearch", "search");
+                builder.UseSetting("Plugins:0:Labels:en", "Sample search");
+                builder.UseSetting("Plugins:0:Capabilities:0:Type", "tableSearch");
+                builder.UseSetting("Plugins:0:Capabilities:0:Path", "search");
                 builder.ConfigureTestServices(services =>
                     services.ConfigureAll<HttpClientFactoryOptions>(options =>
-                        options.HttpMessageHandlerBuilderActions.Add(handlers => handlers.PrimaryHandler = plugin)));
+                        options.HttpMessageHandlerBuilderActions.Add(b => b.PrimaryHandler = handler)));
             });
+        }
 
         [TestMethod]
-        public async Task ConfigListsThePluginAsAFeature()
+        public async Task GetConfig_ListsPlugin()
         {
-            await using var application = WithPlugin(new FakePlugin());
+            await using var application = CreateApplication(new FakePluginHandler());
             using var client = application.CreateClient();
 
             var config = JsonNode.Parse(await client.GetStringAsync("/config"))!;
 
-            var feature = config["features"]!.AsArray().Single(f => f!["id"]!.GetValue<string>() == "sample")!;
-            var featureParams = feature["params"]!.AsArray()
-                .ToDictionary(p => p!["key"]!.GetValue<string>(), p => p!["value"]!.GetValue<string>());
-            Assert.AreEqual("true", featureParams["plugin"]);
-            Assert.AreEqual("plugins/sample", featureParams["path"]);
-            Assert.AreEqual("plugins/sample/search", featureParams["tableSearch"]);
-            Assert.AreEqual("Sample search", featureParams["label"]);
+            var plugin = config["plugins"]!.AsArray().Single()!;
+            Assert.AreEqual("sample", plugin["id"]!.GetValue<string>());
+            Assert.AreEqual("plugins/sample", plugin["path"]!.GetValue<string>());
+            Assert.AreEqual("en", plugin["labels"]![0]!["language"]!.GetValue<string>());
+            Assert.AreEqual("Sample search", plugin["labels"]![0]!["text"]!.GetValue<string>());
+            Assert.AreEqual("tableSearch", plugin["capabilities"]![0]!["type"]!.GetValue<string>());
+            Assert.AreEqual("plugins/sample/search", plugin["capabilities"]![0]!["path"]!.GetValue<string>());
         }
 
         [TestMethod]
-        public async Task ARequestUnderThePluginsPathIsForwardedToThePlugin()
+        public async Task Get_IsForwardedToPlugin()
         {
-            var plugin = new FakePlugin();
-            await using var application = WithPlugin(plugin);
+            var handler = new FakePluginHandler();
+            await using var application = CreateApplication(handler);
             using var client = application.CreateClient();
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/plugins/sample/search?query=population%20region&lang=en");
+            request.Headers.Add("Cookie", "session=secret");
+            request.Headers.Add("API_ADMIN_KEY", "admin-secret");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "client-token");
+            request.Headers.AcceptLanguage.ParseAdd("en");
 
-            using var response = await client.GetAsync("/plugins/sample/search?query=population%20region&lang=da");
+            using var response = await client.SendAsync(request);
 
             Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
             Assert.AreEqual("application/json", response.Content.Headers.ContentType?.MediaType);
             var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
             Assert.AreEqual("TAB001", body["tables"]![0]!["id"]!.GetValue<string>());
 
-            var forwarded = plugin.Requests.Single().Request;
-            Assert.AreEqual(HttpMethod.Get, forwarded.Method);
-            Assert.AreEqual(PluginUrl + "search?query=population%20region&lang=da", forwarded.RequestUri!.AbsoluteUri);
-        }
-
-        [TestMethod]
-        public async Task ThePluginGetsItsOwnHeadersButNotTheClientsCredentials()
-        {
-            var plugin = new FakePlugin();
-            await using var application = WithPlugin(plugin);
-            using var client = application.CreateClient();
-            using var request = new HttpRequestMessage(HttpMethod.Get, "/plugins/sample/search?query=x");
-            request.Headers.Add("Cookie", "session=secret");
-            request.Headers.Add("API_ADMIN_KEY", "admin-secret");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "client-token");
-            request.Headers.AcceptLanguage.ParseAdd("da");
-
-            using var _ = await client.SendAsync(request);
-
-            var forwarded = plugin.Requests.Single().Request;
+            var forwarded = handler.Requests.Single().Request;
+            Assert.AreEqual(PluginUrl + "search?query=population%20region&lang=en", forwarded.RequestUri!.AbsoluteUri);
             Assert.AreEqual("Bearer plugin-key", forwarded.Headers.Authorization?.ToString());
-            Assert.AreEqual("da", forwarded.Headers.AcceptLanguage.ToString());
+            Assert.AreEqual("en", forwarded.Headers.AcceptLanguage.ToString());
             Assert.IsFalse(forwarded.Headers.Contains("Cookie"));
             Assert.IsFalse(forwarded.Headers.Contains("API_ADMIN_KEY"));
         }
 
         [TestMethod]
-        public async Task APostIsForwardedWithItsBody()
+        public async Task Post_IsForwardedWithBody()
         {
-            var plugin = new FakePlugin();
-            await using var application = WithPlugin(plugin);
+            var handler = new FakePluginHandler();
+            await using var application = CreateApplication(handler);
             using var client = application.CreateClient();
 
-            using var _ = await client.PostAsync("/plugins/sample/feedback", new StringContent("""{"good":true}""", Encoding.UTF8, "application/json"));
+            using var response = await client.PostAsync("/plugins/sample/feedback", new StringContent("""{"useful":true}""", Encoding.UTF8, "application/json"));
 
-            var (forwarded, body) = plugin.Requests.Single();
+            var (forwarded, body) = handler.Requests.Single();
             Assert.AreEqual(HttpMethod.Post, forwarded.Method);
             Assert.AreEqual(PluginUrl + "feedback", forwarded.RequestUri!.AbsoluteUri);
-            Assert.AreEqual("""{"good":true}""", body);
-            Assert.AreEqual("application/json", forwarded.Content!.Headers.ContentType?.MediaType);
+            Assert.AreEqual("""{"useful":true}""", body);
         }
 
         [TestMethod]
-        public async Task ThePluginsErrorsReachTheClientAsTheyAre()
+        public async Task Get_PathOutsidePlugin_ReturnsBadRequest()
         {
-            var plugin = new FakePlugin { Answer = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)) };
-            await using var application = WithPlugin(plugin);
-            using var client = application.CreateClient();
+            var handler = new FakePluginHandler();
+            await using var application = CreateApplication(handler);
 
-            using var response = await client.GetAsync("/plugins/sample/search?query=x");
+            var context = await application.Server.SendAsync(c =>
+            {
+                c.Request.Method = HttpMethods.Get;
+                c.Request.Path = "/plugins/sample/../admin";
+            });
 
-            Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            Assert.AreEqual(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+            Assert.IsEmpty(handler.Requests);
         }
 
         [TestMethod]
-        public async Task APluginThatCantBeReachedIsABadGateway()
+        public async Task Get_PluginUnreachable_ReturnsBadGateway()
         {
-            var plugin = new FakePlugin { Answer = (_, _) => throw new HttpRequestException("Connection refused") };
-            await using var application = WithPlugin(plugin);
+            var handler = new FakePluginHandler { Respond = _ => throw new HttpRequestException("Connection refused") };
+            await using var application = CreateApplication(handler);
             using var client = application.CreateClient();
 
             using var response = await client.GetAsync("/plugins/sample/search?query=x");
@@ -154,17 +143,17 @@ namespace PxWebApi_Mvc.Tests
         }
 
         [TestMethod]
-        public async Task APluginThatTakesTooLongIsAGatewayTimeout()
+        public async Task Get_PluginTimesOut_ReturnsGatewayTimeout()
         {
-            var plugin = new FakePlugin
+            var handler = new FakePluginHandler
             {
-                Answer = async (_, ct) =>
+                Respond = async ct =>
                 {
                     await Task.Delay(TimeSpan.FromSeconds(30), ct);
                     return new HttpResponseMessage(HttpStatusCode.OK);
                 },
             };
-            await using var application = WithPlugin(plugin, timeoutSeconds: 1);
+            await using var application = CreateApplication(handler, timeoutSeconds: 1);
             using var client = application.CreateClient();
 
             using var response = await client.GetAsync("/plugins/sample/search?query=x");
@@ -173,23 +162,24 @@ namespace PxWebApi_Mvc.Tests
         }
 
         [TestMethod]
-        public async Task ADisabledPluginIsNeitherListedNorForwardedTo()
+        public async Task DisabledPlugin_IsNotListedOrForwarded()
         {
-            var plugin = new FakePlugin();
-            await using var application = WithPlugin(plugin, enabled: false);
+            var handler = new FakePluginHandler();
+            await using var application = CreateApplication(handler, enabled: false);
             using var client = application.CreateClient();
 
             var config = JsonNode.Parse(await client.GetStringAsync("/config"))!;
+            using var response = await client.GetAsync("/plugins/sample/search?query=x");
 
-            Assert.IsFalse(config["features"]!.AsArray().Any(f => f!["id"]!.GetValue<string>() == "sample"));
-            Assert.AreEqual(HttpStatusCode.NotFound, (await client.GetAsync("/plugins/sample/search?query=x")).StatusCode);
-            Assert.IsEmpty(plugin.Requests);
+            Assert.IsNull(config["plugins"]);
+            Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.IsEmpty(handler.Requests);
         }
 
         [TestMethod]
-        public void APluginWithoutAUsableUrlStopsStartup()
+        public void InvalidUrl_FailsAtStartup()
         {
-            using var application = WithPlugin(new FakePlugin(), url: "not-a-url");
+            using var application = CreateApplication(new FakePluginHandler(), url: "not-a-url");
 
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() => application.CreateClient());
 

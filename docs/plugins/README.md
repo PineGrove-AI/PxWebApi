@@ -1,101 +1,81 @@
-# PxWebApi plugins
+# Plugins
 
-A plugin is a service of its own that PxWebApi offers to its clients. PxWebApi runs none of the plugin's
-code: it lists the plugin in `GET /config`, which is how clients such as PxWeb find out that it is there,
-and forwards requests under `plugins/{name}/` to wherever the plugin runs. The plugin can be written in
-any language and deployed, upgraded and scaled on its own. PxWebApi without plugins behaves exactly as
-before.
+A plugin is an external HTTP service that PxWebApi makes available to its clients. PxWebApi lists each
+plugin under `plugins` in `GET /config` and forwards requests under `plugins/{name}/` to the plugin's URL.
+No plugin code runs inside PxWebApi.
 
-```
-client --GET /config--------------------------> PxWebApi   lists each plugin as a feature
-client --GET /plugins/my-search/search?..-----> PxWebApi --forwards--> the plugin
-                                                adds the plugin's headers (e.g. its API key)
-```
+Since clients only talk to PxWebApi, plugins need no CORS configuration and any credentials for the
+plugin stay on the server.
 
-Because clients only ever talk to PxWebApi, a plugin needs no CORS setup, its credentials never reach a
-browser, and one PxWebApi URL covers the plugins too.
-
-## Configuring a plugin
-
-Run the plugin somewhere PxWebApi can reach it, and list it in appsettings.json:
+## Configuration
 
 ```json
 "Plugins": [
   {
     "Name": "my-search",
     "Url": "http://my-search:8080/pxweb/",
-    "Headers": { "Authorization": "Bearer <the plugin's API key>" },
-    "Label": "Smart search",
-    "TableSearch": "search"
+    "Headers": { "Authorization": "Bearer <key>" },
+    "Labels": { "en": "Smart search", "sv": "Smart sökning" },
+    "Capabilities": [
+      { "Type": "tableSearch", "Path": "search" }
+    ]
   }
 ]
 ```
 
-| Setting | |
+| Setting | Description |
 |---|---|
-| `Name` | The plugin's id: its route segment, `plugins/{Name}`, and its feature id in `GET /config`. Lowercase letters, digits and dashes. |
-| `Url` | Where the plugin is: an absolute http(s) URL. A request for `plugins/{Name}/a/b?x=1` is forwarded to `{Url}a/b?x=1`. |
-| `Enabled` | Optional, defaults to `true`. A disabled plugin is neither listed nor forwarded to. |
-| `TimeoutSeconds` | Optional, defaults to 30. After that, PxWebApi answers 504. |
-| `Headers` | Optional. Added to every request forwarded to the plugin, e.g. its API key. Clients never see them. |
-| `Label` | Optional. A short name for the plugin's function for clients to show, e.g. on a search toggle. |
-| `TableSearch` | Optional. The path of the plugin's table search endpoint, relative to `Url`. See below. |
-| `Params` | Optional. Further parameters for the plugin's feature in `GET /config`, as they are, for clients that know them. |
+| `Name` | Route segment and plugin id. Lowercase letters, digits and dashes. |
+| `Url` | Base URL of the plugin. `plugins/{Name}/a/b?x=1` is forwarded to `{Url}a/b?x=1`. |
+| `Enabled` | Optional, default `true`. |
+| `TimeoutSeconds` | Optional, default `30`. PxWebApi returns 504 when exceeded. |
+| `Headers` | Optional. Added to every request sent to the plugin. |
+| `Labels` | Optional. Name for clients to display, by language id. |
+| `Capabilities` | Optional. What the plugin provides: a `Type` and the `Path` of its endpoint, relative to `Url`. |
 
-Settings can come from environment variables as usual, which keeps keys out of the file:
-`Plugins__0__Headers__Authorization=Bearer ...`, `Plugins__0__Enabled=false`.
+An invalid entry stops PxWebApi at startup. Settings can also be given as environment variables, for
+example `Plugins__0__Headers__Authorization`.
 
-An entry that is wrong (a bad name or URL, two plugins with one name) stops PxWebApi at startup, naming the
-entry. PxWebApi doesn't contact the plugin at startup: the plugin may start after it.
+## Forwarding
 
-## What crosses between client and plugin
+`GET`, `HEAD` and `POST` are forwarded with the query string and body. Only these headers are passed on:
 
-PxWebApi forwards `GET`, `HEAD` and `POST`, with the request's body and query string. Only these headers
-cross:
+- To the plugin: `Accept`, `Accept-Language`, `Content-Type`, `If-None-Match`, `If-Modified-Since` and the
+  configured `Headers`.
+- To the client: `Content-Type`, `Content-Length`, `Cache-Control`, `Content-Language`, `ETag`, `Expires`,
+  `Last-Modified` and `Vary`.
 
-- to the plugin: `Accept`, `Accept-Language`, `If-None-Match`, `If-Modified-Since`, `Content-Type`, and the
-  plugin's own `Headers`. The client's cookies, credentials and PxWebApi's admin key don't.
-- to the client: `Content-Type`, `Content-Length`, `Cache-Control`, `Content-Language`, `ETag`, `Expires`,
-  `Last-Modified`, `Vary`. The plugin can't set cookies on PxWebApi's origin.
+The plugin's status code is returned as is. PxWebApi returns 502 if the plugin cannot be reached and 504
+on timeout. Redirects are not followed.
 
-The plugin's status code reaches the client as it is. If the plugin can't be reached, PxWebApi answers 502;
-if it takes longer than `TimeoutSeconds`, 504. PxWebApi follows no redirects from the plugin. Answers go
-through PxWebApi's response cache like its own (keyed by method, path and query string).
+## Discovery
 
-## How clients find plugins
-
-Each plugin is a feature in `GET /config`:
+Plugins are listed in `GET /config`:
 
 ```json
-{
-  "id": "my-search",
-  "params": [
-    { "key": "plugin", "value": "true" },
-    { "key": "path", "value": "plugins/my-search" },
-    { "key": "tableSearch", "value": "plugins/my-search/search" },
-    { "key": "label", "value": "Smart search" }
-  ]
-}
+"plugins": [
+  {
+    "id": "my-search",
+    "path": "plugins/my-search",
+    "labels": [ { "language": "en", "text": "Smart search" }, { "language": "sv", "text": "Smart sökning" } ],
+    "capabilities": [ { "type": "tableSearch", "path": "plugins/my-search/search" } ]
+  }
+]
 ```
 
-Paths are relative to the API root. `tableSearch` and `label` are there when they are configured, followed
-by the plugin's `Params`.
+Paths are relative to the API root. Clients ignore capability types they do not know, so new types can be
+added without breaking existing clients.
 
-## Table search plugins
+## Capability types
 
-A plugin with a `TableSearch` endpoint answers
+### tableSearch
 
-```
-GET {tableSearch}?query={text}&lang={language}
-```
-
-with the matching tables, best match first:
+`GET {path}?query={text}&lang={language}` returns the matching tables, best match first, as a
+`TableSearchResponse` (see the API specification):
 
 ```json
-{ "tables": [ { "id": "TAB638", "score": 0.93 } ], "note": "optional text to show with the results" }
+{ "tables": [ { "id": "TAB638", "score": 0.93 } ], "note": "Optional text shown with the results" }
 ```
 
-`id` is the table's id as in `GET /tables`; `score` and `note` are optional. The contract is
-[table-search.openapi.yaml](table-search.openapi.yaml). PxWeb offers each table search plugin as an
-alternative to its keyword search, under the plugin's `label`, and falls back to the keyword search if the
-plugin answers with an error.
+PxWeb offers each table search plugin as an alternative to its keyword search and falls back to keyword
+search if the plugin returns an error.

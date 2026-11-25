@@ -104,8 +104,10 @@ namespace PxWeb.Controllers.Api2
                 cors.Params.Add(keyValuePair);
                 configResponse.Features.Add(cors);
 
-                // Each plugin is a feature, which is how clients find it.
-                configResponse.Features.AddRange(_plugins.GetFeatures());
+                if (_plugins.Plugins.Count > 0)
+                {
+                    configResponse.Plugins = _plugins.GetPlugins();
+                }
 
                 return new ObjectResult(configResponse);
             }

@@ -7,156 +7,115 @@ using PxWeb.Api2.Server.Models;
 
 namespace PxWeb.Code.Plugins
 {
-    /// <summary>A plugin PxWebApi offers, and where.</summary>
-    /// <param name="Name">The plugin's id.</param>
-    /// <param name="BasePath">Its path relative to the API root: <c>plugins/{Name}</c>.</param>
-    /// <param name="Upstream">Where requests under <see cref="BasePath"/> are forwarded to. Ends with a slash.</param>
-    /// <param name="Options">Its entry in appsettings.json.</param>
-    public record Plugin(string Name, string BasePath, Uri Upstream, PluginOptions Options)
+    public record ConfiguredPlugin(string Name, string BasePath, Uri Upstream, PluginOptions Options)
     {
-        /// <summary>The named <see cref="System.Net.Http.HttpClient"/> that forwards to this plugin.</summary>
         public string HttpClientName => $"plugin:{Name}";
 
         /// <summary>
-        /// The plugin's URL for a request under its path: the rest of the path under <c>plugins/{Name}/</c>,
-        /// and the query string, added to <see cref="Upstream"/>. Null for a request outside the plugin's
-        /// path, or one whose path would leave <see cref="Upstream"/>.
+        /// The upstream URL for a request under the plugin's path, or null if the request is outside it
+        /// or its path would leave the plugin's base URL.
         /// </summary>
-        public Uri? TargetUri(HttpRequest request)
+        public Uri? GetTargetUri(HttpRequest request)
         {
             if (!request.Path.StartsWithSegments("/" + BasePath, out var rest))
             {
                 return null;
             }
+
             if (rest.Value?.Split('/').Any(segment => segment is "." or "..") == true)
             {
                 return null;
             }
 
-            var relative = rest.ToUriComponent().TrimStart('/') + request.QueryString.ToUriComponent();
-            var target = new Uri(Upstream, relative);
+            var target = new Uri(Upstream, rest.ToUriComponent().TrimStart('/') + request.QueryString.ToUriComponent());
             return target.AbsoluteUri.StartsWith(Upstream.AbsoluteUri, StringComparison.Ordinal) ? target : null;
         }
     }
 
-    /// <summary>
-    /// Parameter keys of a plugin's feature in <c>GET /config</c>. Paths are relative to the API root.
-    /// </summary>
-    public static class PluginFeatureParams
-    {
-        /// <summary>Always <c>true</c>: marks the feature as a plugin.</summary>
-        public const string Plugin = "plugin";
-
-        /// <summary>The plugin's path, <c>plugins/{Name}</c>.</summary>
-        public const string Path = "path";
-
-        /// <summary>The path of the plugin's table search endpoint, which PxWeb offers next to its keyword search.</summary>
-        public const string TableSearch = "tableSearch";
-
-        /// <summary>A short name for the plugin's function for clients to show.</summary>
-        public const string Label = "label";
-    }
-
-    /// <summary>The plugins PxWebApi offers. Empty when none are configured.</summary>
     public partial class PluginRegistry
     {
         public const string RouteSegment = "plugins";
 
-        private static readonly HashSet<string> ReservedParams =
-            [PluginFeatureParams.Plugin, PluginFeatureParams.Path, PluginFeatureParams.TableSearch, PluginFeatureParams.Label];
-
-        /// <param name="entries">The enabled entries under <c>Plugins</c>, with their configuration paths
-        /// (e.g. <c>Plugins:0</c>) for error messages.</param>
         public PluginRegistry(IEnumerable<(string ConfigPath, PluginOptions Options)> entries)
         {
-            var plugins = new List<Plugin>();
+            var plugins = new List<ConfiguredPlugin>();
             foreach (var (configPath, options) in entries)
             {
-                var plugin = Validate(configPath, options);
+                var plugin = CreatePlugin(configPath, options);
                 if (plugins.Any(p => p.Name == plugin.Name))
                 {
-                    throw new InvalidOperationException($"{configPath}: two plugins have the name \"{plugin.Name}\".");
+                    throw new InvalidOperationException($"{configPath}: a plugin named '{plugin.Name}' is already configured.");
                 }
                 plugins.Add(plugin);
             }
             Plugins = plugins;
         }
 
-        public IReadOnlyList<Plugin> Plugins { get; }
+        public IReadOnlyList<ConfiguredPlugin> Plugins { get; }
 
-        /// <summary>One feature per plugin, for <c>GET /config</c>.</summary>
-        public IEnumerable<ApiFeature> GetFeatures()
+        public List<Plugin> GetPlugins()
         {
-            foreach (var plugin in Plugins)
+            return Plugins.Select(plugin => new Plugin
             {
-                var feature = new ApiFeature
+                Id = plugin.Name,
+                Path = plugin.BasePath,
+                Labels = plugin.Options.Labels.Select(label => new PluginLabel { Language = label.Key, Text = label.Value }).ToList(),
+                Capabilities = plugin.Options.Capabilities.Select(capability => new PluginCapability
                 {
-                    Id = plugin.Name,
-                    Params =
-                    [
-                        new() { Key = PluginFeatureParams.Plugin, Value = "true" },
-                        new() { Key = PluginFeatureParams.Path, Value = plugin.BasePath },
-                    ],
-                };
-                if (!string.IsNullOrWhiteSpace(plugin.Options.TableSearch))
-                {
-                    feature.Params.Add(new() { Key = PluginFeatureParams.TableSearch, Value = $"{plugin.BasePath}/{plugin.Options.TableSearch.TrimStart('/')}" });
-                }
-                if (!string.IsNullOrWhiteSpace(plugin.Options.Label))
-                {
-                    feature.Params.Add(new() { Key = PluginFeatureParams.Label, Value = plugin.Options.Label });
-                }
-                foreach (var param in plugin.Options.Params)
-                {
-                    feature.Params.Add(new() { Key = param.Key, Value = param.Value });
-                }
-                yield return feature;
-            }
+                    Type = capability.Type,
+                    Path = $"{plugin.BasePath}/{capability.Path.TrimStart('/')}".TrimEnd('/'),
+                }).ToList(),
+            }).ToList();
         }
 
-        /// <summary>
-        /// Checks an entry, so that a deployment that asked for a plugin doesn't start without it, or with
-        /// one that can't work. Nothing here contacts the plugin: it may well start after PxWebApi.
-        /// </summary>
-        private static Plugin Validate(string configPath, PluginOptions options)
+        private static ConfiguredPlugin CreatePlugin(string configPath, PluginOptions options)
         {
             if (!ValidName().IsMatch(options.Name))
             {
-                throw new InvalidOperationException(
-                    $"{configPath}: Name is \"{options.Name}\": use lowercase letters, digits and dashes.");
+                throw new InvalidOperationException($"{configPath}: Name '{options.Name}' must consist of lowercase letters, digits and dashes.");
             }
 
-            if (!Uri.TryCreate(options.Url, UriKind.Absolute, out var url) || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
+            if (!Uri.TryCreate(options.Url, UriKind.Absolute, out var url)
+                || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps)
+                || url.Query.Length > 0
+                || url.Fragment.Length > 0)
             {
-                throw new InvalidOperationException($"{configPath}: Url \"{options.Url}\" is not an absolute http or https URL.");
-            }
-            if (!string.IsNullOrEmpty(url.Query) || !string.IsNullOrEmpty(url.Fragment))
-            {
-                throw new InvalidOperationException($"{configPath}: Url must not have a query or fragment.");
+                throw new InvalidOperationException($"{configPath}: Url '{options.Url}' must be an absolute http or https URL without query or fragment.");
             }
 
             if (options.TimeoutSeconds <= 0)
             {
-                throw new InvalidOperationException($"{configPath}: TimeoutSeconds must be more than 0.");
+                throw new InvalidOperationException($"{configPath}: TimeoutSeconds must be greater than 0.");
             }
 
-            if (options.TableSearch is { } tableSearch && (tableSearch.Contains("..") || tableSearch.Contains('?') || Uri.TryCreate(tableSearch, UriKind.Absolute, out _)))
+            foreach (var capability in options.Capabilities)
             {
-                throw new InvalidOperationException($"{configPath}: TableSearch must be a path relative to Url, e.g. \"search\".");
+                if (!ValidCapabilityType().IsMatch(capability.Type))
+                {
+                    throw new InvalidOperationException($"{configPath}: capability type '{capability.Type}' must be a camelCase name, for example tableSearch.");
+                }
+
+                if (capability.Path.Contains("..") || capability.Path.Contains('?') || Uri.IsWellFormedUriString(capability.Path, UriKind.Absolute))
+                {
+                    throw new InvalidOperationException($"{configPath}: the path of capability '{capability.Type}' must be relative to Url.");
+                }
             }
 
-            var reserved = options.Params.Keys.FirstOrDefault(ReservedParams.Contains);
-            if (reserved is not null)
+            var duplicate = options.Capabilities.GroupBy(c => c.Type).FirstOrDefault(g => g.Count() > 1);
+            if (duplicate is not null)
             {
-                throw new InvalidOperationException($"{configPath}: Params can't set \"{reserved}\": PxWebApi sets it.");
+                throw new InvalidOperationException($"{configPath}: capability '{duplicate.Key}' is configured more than once.");
             }
 
-            // A trailing slash makes the URL a folder, so the rest of the request's path goes under it.
+            // Treat the URL as a directory so the rest of the request path is appended to it.
             var upstream = url.AbsolutePath.EndsWith('/') ? url : new Uri(url.AbsoluteUri + "/");
-            return new Plugin(options.Name, $"{RouteSegment}/{options.Name}", upstream, options);
+            return new ConfiguredPlugin(options.Name, $"{RouteSegment}/{options.Name}", upstream, options);
         }
 
         [GeneratedRegex("^[a-z0-9]+(-[a-z0-9]+)*$")]
         private static partial Regex ValidName();
+
+        [GeneratedRegex("^[a-z][a-zA-Z0-9]*$")]
+        private static partial Regex ValidCapabilityType();
     }
 }
